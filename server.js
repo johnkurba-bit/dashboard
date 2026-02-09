@@ -62,6 +62,10 @@ const API_KEY = process.env.BOT_API_KEY || "";
 const SITE_PRIVATE = String(process.env.SITE_PRIVATE ?? "0") === "1";
 const SITE_ADMIN_ONLY = String(process.env.SITE_ADMIN_ONLY ?? "0") === "1";
 
+// Bootstrap owner access: set OWNER_ID to your Discord user id.
+// This prevents "No Access" for the server owner even if Bot API admin list is empty.
+const OWNER_ID = String(process.env.OWNER_ID || "").trim();
+
 function esc(s) {
   return String(s || "")
     .replaceAll("&", "&amp;")
@@ -624,6 +628,13 @@ function requireLogin(req, res, next) {
 
 async function requireAdmin(req, res, next) {
   if (!req.user) return res.redirect("/");
+
+  // Owner bypass (bootstrap)
+  if (OWNER_ID && String(req.user.id) === OWNER_ID) {
+    req.session.adminCheckedAt = Date.now();
+    req.session.isAdmin = true;
+    return next();
+  }
   // cache in session for 30s
   const now = Date.now();
   if (req.session.adminCheckedAt && now - req.session.adminCheckedAt < 30000) {
@@ -1377,7 +1388,7 @@ app.get("/logs", requireLogin, requireAdmin, async (req, res) => {
 app.get("/admins", requireLogin, requireAdmin, async (req, res) => {
   const data = await apiGet("/api/admins");
   const admins = data.admins || [];
-  const ownerId = "1219956413586214942";
+  const ownerId = OWNER_ID || "1219956413586214942";
 
   const body = `
   <div class="card">
