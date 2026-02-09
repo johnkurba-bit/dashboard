@@ -11,14 +11,25 @@ const fetchFn =
     import("node-fetch").then(({ default: fetch }) => fetch(...args)));
 
 const app = express();
+// مهم على Render/Proxy: خَلّي Express يثق بالـ proxy عشان يقرأ https صح
+// (ضروري للـ cookies + OAuth redirects)
+app.set("trust proxy", 1);
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+
+// Render/Production: لازم cookie تكون مناسبة للـ https عشان تسجيل الدخول ما يضيع
+const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "change_me",
     resave: false,
     saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: IS_PROD, // على Render غالباً https
+    },
   })
 );
 
@@ -28,19 +39,36 @@ app.use(passport.session());
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
 
+// ===== Base URL / Callback URL (مهم لـ Render) =====
+// على الاستضافة ما تستخدم localhost أبداً. خليه رابط الخدمة الخارجي.
+// تقدر تحط BASE_URL يدويًا = https://dashboard-ah26.onrender.com
+const PORT = Number(process.env.PORT || 3000);
+const BASE_URL = String(
+  process.env.BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    process.env.PUBLIC_URL ||
+    ""
+).replace(/\/+$/, "");
+
+const CALLBACK_URL = String(
+  process.env.DISCORD_CALLBACK_URL ||
+    process.env.DISCORD_CALLBACK ||
+    (BASE_URL ? `${BASE_URL}/auth/callback` : `http://localhost:${PORT}/auth/callback`)
+).replace(/\/+$/, "");
+
 passport.use(
   new DiscordStrategy(
     {
       clientID: process.env.DISCORD_CLIENT_ID,
       clientSecret: process.env.DISCORD_CLIENT_SECRET,
-      callbackURL: process.env.DISCORD_CALLBACK_URL,
+      // لازم يكون مطابق 100% للـ Redirect URL الموجود في Discord Developer Portal
+      callbackURL: CALLBACK_URL,
       scope: ["identify"],
     },
     (accessToken, refreshToken, profile, done) => done(null, profile)
   )
 );
 
-const PORT = Number(process.env.PORT || 3000);
 // مهم: على Replit غالباً البورت الخارجي مربوط على 8080.
 // لوحة التحكم شغّالة على 3000 (Preview داخلي)، والبوت API على 8080.
 // لذلك الافضل تكون قيمة BOT_API_BASE داخلياً: http://127.0.0.1:8080
@@ -693,6 +721,11 @@ app.get("/check", async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
+});
+
+// Render health check endpoint
+app.get("/healthz", (req, res) => {
+  res.status(200).send("ok");
 });
 
 app.get("/login", passport.authenticate("discord"));
@@ -1371,7 +1404,11 @@ app.get("/logs", requireLogin, requireAdmin, async (req, res) => {
 app.get("/admins", requireLogin, requireAdmin, async (req, res) => {
   const data = await apiGet("/api/admins");
   const admins = data.admins || [];
-  const ownerId = "1219956413586214942";
+  const ownerId = String(
+    process.env.OWNER_DISCORD_ID ||
+      process.env.ONWER_DICORD_ID || // (اسم متغيرك القديم)
+      ""
+  ).trim();
 
   const body = `
   <div class="card">
@@ -1445,4 +1482,8 @@ app.post("/admins/remove", requireLogin, requireAdmin, async (req, res) => {
 });
 
 
-app.listen(PORT, () => console.log(`Dashboard running on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Dashboard listening on port ${PORT}`);
+  console.log(`Discord OAuth callbackURL: ${CALLBACK_URL}`);
+  if (BASE_URL) console.log(`BASE_URL: ${BASE_URL}`);
+});
